@@ -24,8 +24,8 @@ def main(args):
     ts = time.time()
 
     dataset = MNIST(
-        root='data', train=True, transform=transforms.ToTensor(),
-        download=True)
+        root='../datasets', train=True, transform=transforms.ToTensor(),
+        download=False)
     data_loader = DataLoader(
         dataset=dataset, batch_size=args.batch_size, shuffle=True)
 
@@ -36,6 +36,41 @@ def main(args):
 
         return (BCE + KLD) / x.size(0)
 
+    def div_fn(x):
+        return torch.sqrt(x)
+
+    def div_fn_inv(x):
+        return torch.square(x)
+
+    def loss_fn_new(x, prior, appr, N):
+        x = x.view(-1, 28*28)
+        v = torch.zeros(torch.Size([args.batch_size])).to(device)
+        for _ in range(N):
+            z_sample = appr.sample()
+            #print(z_sample.shape)
+            
+            decoded = vae.inference(z_sample)
+            mean_likel = decoded.view(-1, 28*28)
+            var_likel = torch.ones(784).to(device)
+            base_likel = torch.distributions.normal.Normal(mean_likel, var_likel)
+            likel = torch.distributions.independent.Independent(base_likel, 1)
+
+            #w = likel.log_prob(x) * prior.log_prob(z) / appr.log_prob(z)
+
+            #print(w)
+
+            w = torch.exp(likel.log_prob(x)) * torch.exp(prior.log_prob(z)) / torch.exp(appr.log_prob(z))
+
+            #print(w)
+            v += div_fn(w)
+            #v = torch.mean(div_fn(v), axis = 0)
+        v[i] /= N
+
+        print(v)
+
+        #return math.log(div_fn_inv(v))
+        return torch.mean(div_fn_inv(v))
+    
     vae = VAE(
         encoder_layer_sizes=args.encoder_layer_sizes,
         latent_size=args.latent_size,
@@ -66,7 +101,18 @@ def main(args):
                 tracker_epoch[id]['y'] = z[i, 1].item()
                 tracker_epoch[id]['label'] = yi.item()
 
-            loss = loss_fn(recon_x, x, mean, log_var)
+            mean_prior = torch.zeros(args.latent_size).to(device)
+            var_prior = torch.ones(args.latent_size).to(device)
+            base_prior = torch.distributions.normal.Normal(mean_prior, var_prior)
+            prior = torch.distributions.independent.Independent(base_prior, 1)
+
+            mean_appr = mean
+            var_appr = torch.exp(0.5 * log_var)
+            base_appr = torch.distributions.normal.Normal(mean_appr, var_appr)
+            appr = torch.distributions.independent.Independent(base_appr, 1)
+
+            #loss = loss_fn(recon_x, x, mean, log_var)
+            loss = loss_fn_new(x, prior, appr, N = 10)
 
             optimizer.zero_grad()
             loss.backward()
@@ -127,7 +173,7 @@ if __name__ == '__main__':
     parser.add_argument("--learning_rate", type=float, default=0.001)
     parser.add_argument("--encoder_layer_sizes", type=list, default=[784, 256])
     parser.add_argument("--decoder_layer_sizes", type=list, default=[256, 784])
-    parser.add_argument("--latent_size", type=int, default=2)
+    parser.add_argument("--latent_size", type=int, default=10)
     parser.add_argument("--print_every", type=int, default=100)
     parser.add_argument("--fig_root", type=str, default='figs')
     parser.add_argument("--conditional", action='store_true')
