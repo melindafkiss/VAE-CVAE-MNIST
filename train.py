@@ -37,17 +37,17 @@ def main(args):
         return (BCE + KLD) / x.size(0)
 
     def div_fn(x):
-        return torch.sqrt(x)
+        return x
 
     def div_fn_inv(x):
-        return torch.square(x)
+        return x
 
-    def loss_fn_new(x, prior, appr, N):
+    def loss_fn_new(x, prior, mean, log_var, N):
         x = x.view(-1, 28*28)
         v = torch.zeros(torch.Size([args.batch_size])).to(device)
         for _ in range(N):
-            z_sample = appr.sample()
-            #print(z_sample.shape)
+            z_sample = prior.sample()
+            z_sample = mean + z_sample * torch.exp(0.5 * log_var)
             
             decoded = vae.inference(z_sample)
             mean_likel = decoded.view(-1, 28*28)
@@ -55,20 +55,14 @@ def main(args):
             base_likel = torch.distributions.normal.Normal(mean_likel, var_likel)
             likel = torch.distributions.independent.Independent(base_likel, 1)
 
-            #w = likel.log_prob(x) * prior.log_prob(z) / appr.log_prob(z)
+            w = likel.log_prob(x) + prior.log_prob(z) - appr.log_prob(z)
 
             #print(w)
+            v += div_fn(-w)
+        v /= N
 
-            w = torch.exp(likel.log_prob(x)) * torch.exp(prior.log_prob(z)) / torch.exp(appr.log_prob(z))
+        #print(v)
 
-            #print(w)
-            v += div_fn(w)
-            #v = torch.mean(div_fn(v), axis = 0)
-        v[i] /= N
-
-        print(v)
-
-        #return math.log(div_fn_inv(v))
         return torch.mean(div_fn_inv(v))
     
     vae = VAE(
@@ -111,8 +105,13 @@ def main(args):
             base_appr = torch.distributions.normal.Normal(mean_appr, var_appr)
             appr = torch.distributions.independent.Independent(base_appr, 1)
 
+
+            if args.baseline:
+                loss = loss_fn(recon_x, x, mean, log_var)
+            else: 
+                loss = loss_fn_new(x, prior, mean, log_var, N = 10)
             #loss = loss_fn(recon_x, x, mean, log_var)
-            loss = loss_fn_new(x, prior, appr, N = 10)
+            #loss = loss_fn_new(x, prior, appr, N = 10)
 
             optimizer.zero_grad()
             loss.backward()
@@ -169,14 +168,16 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--batch_size", type=int, default=100)
     parser.add_argument("--learning_rate", type=float, default=0.001)
     parser.add_argument("--encoder_layer_sizes", type=list, default=[784, 256])
     parser.add_argument("--decoder_layer_sizes", type=list, default=[256, 784])
     parser.add_argument("--latent_size", type=int, default=10)
     parser.add_argument("--print_every", type=int, default=100)
     parser.add_argument("--fig_root", type=str, default='figs')
+    parser.add_argument("--baseline", type=bool, default=False)
     parser.add_argument("--conditional", action='store_true')
+    
 
     args = parser.parse_args()
 
